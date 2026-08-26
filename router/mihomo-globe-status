@@ -1,0 +1,12 @@
+#!/bin/sh
+
+port="$(uci -q get mihomo-globe.main.port || printf '9091')"
+listen="$(uci -q get mihomo-globe.main.listen || printf 'lan')"
+
+if [ "$listen" = 'lan' ]; then
+    listen="$(ubus call network.interface.lan status 2>/dev/null \
+        | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null)"
+fi
+
+/etc/init.d/mihomo-globe status
+printf 'URL: http://%s:%s/\n' "${listen:-ROUTER_IP}" "$port"

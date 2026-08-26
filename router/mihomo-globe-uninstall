@@ -1,0 +1,17 @@
+#!/bin/sh
+
+set -eu
+
+/etc/init.d/mihomo-globe stop 2>/dev/null || true
+/etc/init.d/mihomo-globe disable 2>/dev/null || true
+
+rm -f /etc/init.d/mihomo-globe
+rm -f /etc/config/mihomo-globe
+rm -f /usr/bin/mihomo-globe-status
+rm -f /usr/bin/mihomo-globe-update
+rm -f /usr/bin/mihomo-globe-uninstall
+rm -rf /usr/share/mihomo-globe
+rm -rf /usr/share/mihomo-globe.previous
+rm -rf /etc/mihomo-globe
+
+printf '%s\n' 'Mihomo Globe has been removed.'

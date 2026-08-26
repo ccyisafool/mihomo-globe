@@ -1,0 +1,132 @@
+#!/bin/sh
+
+set -u
+
+PROFILE="/etc/nikki/run/config.yaml"
+
+respond_json() {
+    status="$1"
+    body="$2"
+    printf 'Status: %s\r\n' "$status"
+    printf 'Content-Type: application/json; charset=utf-8\r\n'
+    printf 'Cache-Control: no-store\r\n'
+    printf 'X-Content-Type-Options: nosniff\r\n\r\n'
+    printf '%s\n' "$body"
+}
+
+path_pair="${QUERY_STRING%%&*}"
+path="${path_pair#path=}"
+provider='ipip.net'
+
+case "&${QUERY_STRING}&" in
+    *'&provider='*)
+        provider="${QUERY_STRING#*provider=}"
+        provider="${provider%%&*}"
+        ;;
+esac
+
+case "$path" in
+    health)
+        respond_json '200 OK' '{"ok":true}'
+        exit 0
+        ;;
+    origin)
+        case "$provider" in
+            ipip.net)
+                origin_url='https://myip.ipip.net/json'
+                ;;
+            ip.sb)
+                origin_url='https://api.ip.sb/geoip'
+                ;;
+            ipwho.is)
+                origin_url='https://ipwho.is'
+                ;;
+            ipapi.is)
+                origin_url='https://api.ipapi.is'
+                ;;
+            *)
+                respond_json '400 Bad Request' '{"error":"unsupported origin provider"}'
+                exit 0
+                ;;
+        esac
+
+        origin_body="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 8 \
+            --header 'Accept: application/json' --user-agent 'Mihomo-Globe/0.1' \
+            "$origin_url" 2>/dev/null || true)"
+        if [ -n "$origin_body" ]; then
+            respond_json '200 OK' "$origin_body"
+        else
+            respond_json '502 Bad Gateway' '{"error":"origin lookup failed"}'
+        fi
+        exit 0
+        ;;
+    connections|version)
+        ;;
+    *)
+        respond_json '404 Not Found' '{"error":"unknown endpoint"}'
+        exit 0
+        ;;
+esac
+
+if [ ! -r "$PROFILE" ]; then
+    respond_json '503 Service Unavailable' '{"error":"Nikki is not running"}'
+    exit 0
+fi
+
+if ! command -v yq >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+    respond_json '500 Internal Server Error' '{"error":"required Nikki tools are missing"}'
+    exit 0
+fi
+
+controller="$(yq -r '."external-controller" // ""' "$PROFILE" 2>/dev/null)"
+tls_controller="$(yq -r '."external-controller-tls" // ""' "$PROFILE" 2>/dev/null)"
+secret="$(yq -r '.secret // ""' "$PROFILE" 2>/dev/null)"
+scheme='http'
+
+if [ -z "$controller" ] && [ -n "$tls_controller" ]; then
+    controller="$tls_controller"
+    scheme='https'
+fi
+
+if [ -z "$controller" ]; then
+    respond_json '503 Service Unavailable' '{"error":"Mihomo controller is disabled"}'
+    exit 0
+fi
+
+case "$controller" in
+    unix:*|/*)
+        respond_json '500 Internal Server Error' '{"error":"Unix-socket controllers are not supported yet"}'
+        exit 0
+        ;;
+    http://*|https://*)
+        base="$controller"
+        ;;
+    '[::]:'*)
+        port="${controller##*:}"
+        base="$scheme://[::1]:$port"
+        ;;
+    0.0.0.0:*)
+        port="${controller##*:}"
+        base="$scheme://127.0.0.1:$port"
+        ;;
+    :*)
+        base="$scheme://127.0.0.1$controller"
+        ;;
+    *)
+        base="$scheme://$controller"
+        ;;
+esac
+
+if [ -n "$secret" ]; then
+    body="$(curl --fail --silent --show-error --insecure --connect-timeout 2 --max-time 8 \
+        --oauth2-bearer "$secret" "$base/$path" 2>/dev/null || true)"
+else
+    body="$(curl --fail --silent --show-error --insecure --connect-timeout 2 --max-time 8 \
+        "$base/$path" 2>/dev/null || true)"
+fi
+
+if [ -n "$body" ]; then
+    respond_json '200 OK' "$body"
+else
+    respond_json '502 Bad Gateway' '{"error":"Mihomo request failed"}'
+fi
